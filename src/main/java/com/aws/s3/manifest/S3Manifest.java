@@ -22,7 +22,6 @@ import java.util.zip.GZIPOutputStream;
 
 public class S3Manifest
 {
-
     /**
      * Recursive listing of S3 bucket
      * @param args the command line arguments
@@ -30,103 +29,122 @@ public class S3Manifest
      */
     public static void main(String [] args) throws IOException
     {
-        Map<String, String> parameters = parseCommandLine(args);
-        Map<String, Long> sizes = new TreeMap<>();
-        Map<String, Long> counts = new TreeMap<>();
-
-        sizes.put("STANDARD", 0L);
-        sizes.put("REDUCED_REDUNDANCY", 0L);
-        sizes.put("GLACIER", 0L);
-        sizes.put("STANDARD_IA", 0L);
-        sizes.put("ONEZONE_IA", 0L);
-        sizes.put("INTELLIGENT_TIERING", 0L);
-
-        counts.put("STANDARD", 0L);
-        counts.put("REDUCED_REDUNDANCY", 0L);
-        counts.put("GLACIER", 0L);
-        counts.put("STANDARD_IA", 0L);
-        counts.put("ONEZONE_IA", 0L);
-        counts.put("INTELLIGENT_TIERING", 0L);
-
-        FileOutputStream fileOut = new FileOutputStream(parameters.get("output"));
-        GZIPOutputStream zipOut = new GZIPOutputStream(fileOut);
-        OutputStreamWriter bufferedWriter = new OutputStreamWriter(zipOut);
-
-        CSVPrinter csvPrinter = new CSVPrinter(bufferedWriter,
-                CSVFormat.EXCEL.withHeader("Path", "Name", "StorageClass", "Size").withQuoteMode(QuoteMode.NON_NUMERIC));
-
-        AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard();
-
-        if (parameters.containsKey("profile"))
+        try
         {
-            System.out.println("Using named profile: " + parameters.get("profile"));
-            builder.withCredentials(new ProfileCredentialsProvider(parameters.get("profile")));
-        }
+            Map<String, String> parameters = parseCommandLine(args);
+            Map<String, Long> sizes = new TreeMap<>();
+            Map<String, Long> counts = new TreeMap<>();
 
-        if (parameters.containsKey("region"))
-        {
-            System.out.println("Using region: " + parameters.get("region"));
-            builder.withRegion(parameters.get("region"));
-        }
+            FileOutputStream fileOut = new FileOutputStream(parameters.get("output"));
+            GZIPOutputStream zipOut = new GZIPOutputStream(fileOut);
+            OutputStreamWriter bufferedWriter = new OutputStreamWriter(zipOut);
 
-        AmazonS3 s3 = builder.build();
+            CSVPrinter csvPrinter = new CSVPrinter(bufferedWriter,
+                    CSVFormat.EXCEL.withHeader("Path", "Name", "StorageClass", "Size").withQuoteMode(QuoteMode.NON_NUMERIC));
 
-        ListObjectsRequest request = new ListObjectsRequest().withBucketName(parameters.get("bucket")).withMaxKeys(1000);
+            AmazonS3ClientBuilder builder = AmazonS3ClientBuilder.standard();
 
-        if (parameters.containsKey("prefix"))
-        {
-            System.out.println("Using S3 prefix: " + parameters.get("prefix"));
-            request.withPrefix(parameters.get("prefix"));
-        }
-
-        ObjectListing listing = s3.listObjects(request);
-
-        long objectCount = 0L;
-
-        while (true)
-        {
-            for (S3ObjectSummary summary: listing.getObjectSummaries())
+            if (parameters.containsKey("profile"))
             {
-                csvPrinter.printRecord(FilenameUtils.getPath(summary.getKey()),
-                        FilenameUtils.getName(summary.getKey()),
-                        summary.getStorageClass(),
-                        summary.getSize());
+                System.out.println("Using named profile: " + parameters.get("profile"));
+                builder.withCredentials(new ProfileCredentialsProvider(parameters.get("profile")));
+            }
 
-                sizes.put(summary.getStorageClass(), sizes.get(summary.getStorageClass()) + summary.getSize());
-                counts.put(summary.getStorageClass(), counts.get(summary.getStorageClass()) + 1);
-                objectCount++;
+            if (parameters.containsKey("region"))
+            {
+                System.out.println("Using region: " + parameters.get("region"));
+                builder.withRegion(parameters.get("region"));
+            }
 
-                if (objectCount % 100000L == 0L)
+            AmazonS3 s3 = builder.build();
+
+            ListObjectsRequest request = new ListObjectsRequest().withBucketName(parameters.get("bucket")).withMaxKeys(1000);
+
+            if (parameters.containsKey("prefix"))
+            {
+                System.out.println("Using S3 prefix: " + parameters.get("prefix"));
+                request.withPrefix(parameters.get("prefix"));
+            }
+
+            ObjectListing listing = s3.listObjects(request);
+
+            long objectCount = 0L;
+
+            while (true)
+            {
+                for (S3ObjectSummary summary : listing.getObjectSummaries())
                 {
-                    System.out.println(String.format("Listed: %d objects...", objectCount));
+                    csvPrinter.printRecord(FilenameUtils.getPath(summary.getKey()),
+                            FilenameUtils.getName(summary.getKey()),
+                            summary.getStorageClass(),
+                            summary.getSize());
+
+                    trackObject(sizes, counts, summary.getStorageClass(), summary.getSize());
+
+                    objectCount++;
+
+                    if (objectCount % 100000L == 0L)
+                    {
+                        System.out.println(String.format("Listed: %d objects...", objectCount));
+                    }
                 }
+
+                if (!listing.isTruncated())
+                {
+                    break;
+                }
+
+                request.withMarker(listing.getNextMarker());
+
+                listing = s3.listObjects(request);
             }
 
-            if (!listing.isTruncated())
+            csvPrinter.flush();
+            bufferedWriter.close();
+            zipOut.close();
+            fileOut.close();
+
+            System.out.println(String.format("Found a total of: %d objects", objectCount));
+
+            for (String storageClass : sizes.keySet())
             {
-                break;
+                System.out.println(String.format("%s count: %d size: %s",
+                        storageClass,
+                        counts.get(storageClass),
+                        humanReadableByteCount(sizes.get(storageClass))));
             }
-
-            request.withMarker(listing.getNextMarker());
-
-            listing = s3.listObjects(request);
         }
-
-        csvPrinter.flush();
-        bufferedWriter.close();
-        zipOut.close();
-        fileOut.close();
-
-        System.out.println(String.format("Found a total of: %d objects", objectCount));
-
-        for (String storageClass: sizes.keySet())
+        catch (Throwable t)
         {
-            System.out.println(String.format("%s count: %d size: %s",
-                    storageClass,
-                    counts.get(storageClass),
-                    humanReadableByteCount(sizes.get(storageClass))));
+            System.out.println("Failed to generate manifest: " + t.getMessage());
+            System.exit(1);
+        }
+    }
+
+    /**
+     * Track this object
+     * @param sizes the map of sizes
+     * @param counts the map of counts
+     * @param storageClass the storage class for the object
+     * @param size the size in bytes
+     */
+    private static void trackObject(Map<String, Long> sizes, Map<String, Long> counts, String storageClass, long size)
+    {
+        if (!sizes.containsKey(storageClass))
+        {
+            sizes.put(storageClass, 0L);
         }
 
+        if (!counts.containsKey(storageClass))
+        {
+            counts.put(storageClass, 0L);
+        }
+
+        long currentSize = sizes.get(storageClass);
+        long currentCount = counts.get(storageClass);
+
+        sizes.put(storageClass, currentSize + size);
+        counts.put(storageClass, currentCount + 1);
     }
 
     /**
@@ -154,18 +172,20 @@ public class S3Manifest
 
         final Options options = new Options();
 
-        options.addRequiredOption("b", "bucket", true, "Required S3 bucket name to enumerate");
-        options.addOption("p", "prefix", true, "Optional S3 prefix to enumerate");
-        options.addRequiredOption("o", "output", true, "Output CSV file");
-        options.addOption("z", "profile", true, "Optional AWS profile name to use");
-        options.addOption("r", "region", true, "AWS region [ap-southeast-2]");
+        options.addRequiredOption(null, "bucket", true, "Required S3 bucket name to enumerate");
+        options.addRequiredOption(null, "region", true, "Required AWS region for the bucket");
+        options.addRequiredOption(null, "output", true, "Required output CSV file (.gz is appended)");
+        options.addOption(null, "prefix", true, "Optional S3 prefix to list under");
+        options.addOption(null, "profile", true, "Optional AWS profile name to use");
 
         CommandLineParser parser = new DefaultParser();
+
         try
         {
             CommandLine line = parser.parse(options, args);
 
             parameters.put("bucket", line.getOptionValue("bucket"));
+            parameters.put("region", line.getOptionValue("region"));
 
             if (line.getOptionValue("output").endsWith(".gz"))
             {
@@ -176,7 +196,6 @@ public class S3Manifest
                 parameters.put("output", line.getOptionValue("output") + ".gz");
             }
 
-
             if (line.hasOption("prefix"))
             {
                 parameters.put("prefix", line.getOptionValue("prefix"));
@@ -186,16 +205,11 @@ public class S3Manifest
             {
                 parameters.put("profile", line.getOptionValue("profile"));
             }
-
-            if (line.hasOption("region"))
-            {
-                parameters.put("region", line.getOptionValue("region"));
-            }
         }
         catch (ParseException e)
         {
             HelpFormatter formatter = new HelpFormatter();
-            formatter.printHelp("S3Lister", options);
+            formatter.printHelp("java -jar target/S3Manifest-2.0.jar", options);
             System.out.println("Command line parsing failed: " + e.getMessage());
             throw new RuntimeException(e);
         }
