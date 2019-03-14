@@ -2,7 +2,7 @@
 
 Sample code for building a CSV manifest of huge S3 buckets for analytics.
 
-It generates count and total size statistics per storage type and produces a gzipped comma separated CSV file with the following structure:
+It generates count and total size statistics per storage type and produces a gzipped, comma separated CSV file with the following structure:
 
 	"Path","Name","StorageClass","Size"
 	"css/","file1.css","STANDARD",144832
